@@ -32,6 +32,9 @@ send_msg(struct http_reply *http,char *msg,char *host,int port,int operation) {
 	struct sockaddr_in	localAddr, servAddr;
 	struct hostent		*h;
 	char			tmp[1024], *buf, *p;
+	pid_t pid;
+	int savedstdin, savedstdout;
+	int pread[2], pwrite[2];   /* parent read/write fd */
 
 #ifdef WIN32
 	int tv=timeout*1000;
@@ -41,75 +44,120 @@ send_msg(struct http_reply *http,char *msg,char *host,int port,int operation) {
 	tv.tv_usec = 0;
 #endif
 
-	/* resolve name */
-	h = gethostbyname(host);
-	if (h == NULL) {
-		printf("unknown host '%s'\n", host);
-		return (1);
-	}
+	if (sscep_offline_mode) {
+		/* offline mode for tests */
+		/* save current stdin/stdout */
+		savedstdin = dup(0);
+		savedstdout = dup(1);
 
-	/* fill in server socket structure: */
-	servAddr.sin_family = h->h_addrtype;
-	memcpy((char *) &servAddr.sin_addr.s_addr,
-		h->h_addr_list[0], h->h_length);
-	servAddr.sin_port = htons(port);
+		/* set up pipe between parent and child process */
+		if (pipe(pread) != 0) {
+			printf("pipe creation failed!\n");
+			return 1;
+		}
+		if (pipe(pwrite) != 0) {
+			printf("pipe creation failed!\n");
+			return 1;
+		}
+		close(0);
+		close(1);
 
-	/* create socket */
-	sd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sd < 0) {
-		perror("cannot open socket ");
-		return (1);
-	}
-	/* bind any port number */
-	localAddr.sin_family = AF_INET;
-	localAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	localAddr.sin_port = htons(0);
-	rc = bind(sd, (struct sockaddr *) &localAddr, sizeof(localAddr));
-	if (rc < 0) {
-		printf("cannot bind port TCP %u\n", port);
-		perror("error ");
-		return (1);
-	}
+		pid = fork();
+		if (pid < 0) {
+			/* restore original stdin/stdout */
+			dup2(savedstdin, 0);
+			dup2(savedstdout, 1);
+			printf("FORK FAILED\n");
+			return 1;
+		} else if (pid == 0) { /* child */
+			dup2(pwrite[0], 0); /* parent's write is my read */
+			dup2(pread[1], 1);  /* parent's read is my write */
+			execlp(sscep_offline_mode_executable, "", (char *)NULL);
+		} else {               /* parent */
+			dup2(pwrite[1], 1);
+			dup2(pread[0], 0);
+			/* read from offline program */
+			buf = (char *)malloc(1024);
+			used = 0;
+			while ((bytes = read(0,&buf[used],1024)) > 0) {
+				used += bytes;
+				buf = (char *)realloc(buf, used + 1024);
+			}
+			/* restore original stdin/stdout */
+			dup2(savedstdin, 0);
+			dup2(savedstdout, 1);
+		}
+  } else {
+		/* online mode, do HTTP request */
+		/* resolve name */
+		h = gethostbyname(host);
+		if (h == NULL) {
+			printf("unknown host '%s'\n", host);
+			return (1);
+		}
 	
-	/* connect to server */
-	/* The two socket options SO_RCVTIMEO and SO_SNDTIMEO do not work with connect
-	   connect has a default timeout of 120 */
-	rc = connect(sd, (struct sockaddr *) &servAddr, sizeof(servAddr));
-	if (rc < 0) {
-		perror("cannot connect");
-		return (1);
-	}
-	setsockopt(sd,SOL_SOCKET, SO_RCVTIMEO,(void *)&tv, sizeof(tv));
-	setsockopt(sd,SOL_SOCKET, SO_SNDTIMEO,(void *)&tv, sizeof(tv));
-	/* send data */ 
-	rc = send(sd, msg,strlen(msg), 0);
-
-	if (rc < 0) {
-		perror("cannot send data ");
-		close(sd);
-		return (1);
-	}
-	else if(rc != strlen(msg))
-	{
-		fprintf(stderr,"incomplete send\n");
-		close(sd);
-		return (1);
-	}
+		/* fill in server socket structure: */
+		servAddr.sin_family = h->h_addrtype;
+		memcpy((char *) &servAddr.sin_addr.s_addr,
+			h->h_addr_list[0], h->h_length);
+		servAddr.sin_port = htons(port);
 	
-	/* Get response */
-	buf = (char *)malloc(1024);
-        used = 0;
-        while ((bytes = recv(sd,&buf[used],1024,0)) > 0) {
-                used += bytes;
-                buf = (char *)realloc(buf, used + 1024);
-	}
-	if (bytes < 0) {
-		perror("error receiving data ");
-		close(sd);
-		return (1);
-	}
-        buf[used] = '\0';
+		/* create socket */
+		sd = socket(AF_INET, SOCK_STREAM, 0);
+		if (sd < 0) {
+			perror("cannot open socket ");
+			return (1);
+		}
+		/* bind any port number */
+		localAddr.sin_family = AF_INET;
+		localAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+		localAddr.sin_port = htons(0);
+		rc = bind(sd, (struct sockaddr *) &localAddr, sizeof(localAddr));
+		if (rc < 0) {
+			printf("cannot bind port TCP %u\n", port);
+			perror("error ");
+			return (1);
+		}
+
+		/* connect to server */
+		/* The two socket options SO_RCVTIMEO and SO_SNDTIMEO do not work with connect
+		   connect has a default timeout of 120 */
+		rc = connect(sd, (struct sockaddr *) &servAddr, sizeof(servAddr));
+		if (rc < 0) {
+			perror("cannot connect");
+			return (1);
+		}
+		setsockopt(sd,SOL_SOCKET, SO_RCVTIMEO,(void *)&tv, sizeof(tv));
+		setsockopt(sd,SOL_SOCKET, SO_SNDTIMEO,(void *)&tv, sizeof(tv));
+		/* send data */
+		rc = send(sd, msg,strlen(msg), 0);
+
+		if (rc < 0) {
+			perror("cannot send data ");
+			close(sd);
+			return (1);
+		}
+		else if(rc != strlen(msg))
+		{
+			fprintf(stderr,"incomplete send\n");
+			close(sd);
+			return (1);
+		}
 		
+		/* Get response */
+		buf = (char *)malloc(1024);
+	        used = 0;
+	        while ((bytes = recv(sd,&buf[used],1024,0)) > 0) {
+	                used += bytes;
+	                buf = (char *)realloc(buf, used + 1024);
+		}
+		if (bytes < 0) {
+			perror("error receiving data ");
+			close(sd);
+			return (1);
+		}
+		buf[used] = '\0';
+	}
 	
 	/* Fetch the status code: */
 	#ifdef WIN32

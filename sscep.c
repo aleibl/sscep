@@ -289,6 +289,14 @@ main(int argc, char **argv) {
 	if (d_flag)
 		v_flag = 1;
 	
+	/* check environment to see if we are supposed to be in offline mode */
+  sscep_offline_mode_executable = getenv(SSCEP_OFFLINE_MODE_ENV_VAR);
+	if (sscep_offline_mode_executable == NULL) {
+    sscep_offline_mode = 0;
+  } else {
+    sscep_offline_mode = 1;
+  }
+
 	if(f_char){
 		scep_conf_init(f_char);
 	}else{
@@ -307,9 +315,14 @@ main(int argc, char **argv) {
 			(void)fclose(fp);
 		}
 	}*/
-	if (v_flag)
+	if (v_flag) {
 		fprintf(stdout, "%s: starting sscep, version %s\n",
 			pname, VERSION);
+		if (sscep_offline_mode) {
+			fprintf(stdout, "%s: OFFLINE mode, using %s\n",
+				pname, sscep_offline_mode_executable);
+		}
+	}
 
 	/*
 	* Create a new SCEP transaction and self-signed

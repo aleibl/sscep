@@ -134,3 +134,10 @@ char *w_char;
 
 /* End of command line options */
 
+/* Not strictly a command line option, the offline mode
+   is triggered by an environment variable.
+   Added here to allow access from all functions.
+*/
+int sscep_offline_mode;
+char *sscep_offline_mode_executable;
+

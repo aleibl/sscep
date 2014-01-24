@@ -145,6 +145,13 @@ int operation_flag;
 //define encoding for capi engine support
 #define MY_ENCODING_TYPE  (PKCS_7_ASN_ENCODING | X509_ASN_ENCODING)
 
+/* environment variable to trigger offline mode
+   where a local executable is called instead
+   of making a HTTP request
+   this feature allows simpler tests
+*/
+#define SSCEP_OFFLINE_MODE_ENV_VAR "SSCEP_OFFLINE_EXE"
+
 /* End of Global defines */
 
 
